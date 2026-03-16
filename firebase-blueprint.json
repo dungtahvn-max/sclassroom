@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Student profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID from Firebase Auth" },
+        "hoTen": { "type": "string" },
+        "ngaySinh": { "type": "string" },
+        "gioiTinh": { "type": "string" },
+        "noiSinh": { "type": "string" },
+        "cccd": { "type": "string" },
+        "noiO": { "type": "string" },
+        "sdt": { "type": "string" },
+        "to": { "type": "string" },
+        "chucVu": { "type": "string" },
+        "stickerCount": { "type": "number" },
+        "role": { "type": "string", "enum": ["student", "class_leader", "group_leader", "teacher"] }
+      },
+      "required": ["uid", "hoTen", "role"]
+    },
+    "LogGeneral": {
+      "title": "General Log",
+      "description": "Daily logs by class leaders",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "hocTap": { "type": "string" },
+        "phongTrao": { "type": "string" },
+        "luuY": { "type": "string" },
+        "tamSu": { "type": "string" },
+        "thongBaoChung": { "type": "string" },
+        "ghiChepViecTot": { "type": "string" },
+        "ghiChepViPham": { "type": "string" },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "LogGroup": {
+      "title": "Group Log",
+      "description": "Daily logs by group leaders",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "to": { "type": "string" },
+        "tenHocSinh": { "type": "string" },
+        "hocTap": { "type": "number" },
+        "hoatDong": { "type": "number" },
+        "hoaDong": { "type": "number" },
+        "chuyenCan": { "type": "number" },
+        "dongPhuc": { "type": "number" },
+        "nhanRieng": { "type": "string" },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "LogPersonal": {
+      "title": "Personal Log",
+      "description": "Self-evaluation by students",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "uid": { "type": "string" },
+        "tenHocSinh": { "type": "string" },
+        "diemHT": { "type": "number" },
+        "diemHD": { "type": "number" },
+        "diemHoaDong": { "type": "number" },
+        "diemCC": { "type": "number" },
+        "diemDP": { "type": "number" },
+        "machRieng": { "type": "string" },
+        "mucDoHanhPhuc": { "type": "number" },
+        "canGapCo": { "type": "boolean" }
+      }
+    },
+    "TeacherFeedback": {
+      "title": "Teacher Feedback",
+      "description": "Feedback and stickers from teacher",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "noiDung": { "type": "string" },
+        "loaiSticker": { "type": "string" },
+        "stickerIcon": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "students": {
+      "schema": "Student",
+      "description": "Collection of student profiles"
+    },
+    "logs_general": {
+      "schema": "LogGeneral",
+      "description": "Daily general class logs"
+    },
+    "logs_group": {
+      "schema": "LogGroup",
+      "description": "Daily group logs"
+    },
+    "logs_personal": {
+      "schema": "LogPersonal",
+      "description": "Daily personal student logs"
+    },
+    "teacher_feedback": {
+      "schema": "TeacherFeedback",
+      "description": "Teacher feedback and stickers"
+    }
+  }
+}

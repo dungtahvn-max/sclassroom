@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { createClient } from '@libsql/client';
@@ -16,28 +17,32 @@ let isTurso = false;
 let initializationPromise: Promise<void> | null = null;
 
 async function setupDb() {
+  console.log('Setting up database...');
   if (db) return;
   if (initializationPromise) return initializationPromise;
 
   initializationPromise = (async () => {
-    if (TURSO_URL && TURSO_TOKEN) {
-      console.log('Using Turso Cloud Database');
-      db = createClient({
-        url: TURSO_URL,
-        authToken: TURSO_TOKEN,
-      });
-      isTurso = true;
-    } else {
-      if (process.env.VERCEL === '1') {
-        throw new Error('DATABASE ERROR: Bạn đang chạy trên Vercel nhưng chưa cấu hình Turso Database. Vui lòng thiết lập TURSO_DATABASE_URL và TURSO_AUTH_TOKEN trong Environment Variables của Vercel.');
+    try {
+      if (TURSO_URL && TURSO_TOKEN) {
+        console.log('Using Turso Cloud Database');
+        db = createClient({
+          url: TURSO_URL,
+          authToken: TURSO_TOKEN,
+        });
+        isTurso = true;
+      } else {
+        console.log('Using Local SQLite Database');
+        const { default: Database } = await import('better-sqlite3');
+        const dbPath = process.env.DATABASE_PATH || 'classroom.db';
+        db = new Database(dbPath);
       }
-      console.log('Using Local SQLite Database');
-      const { default: Database } = await import('better-sqlite3');
-      const dbPath = process.env.DATABASE_PATH || 'classroom.db';
-      db = new Database(dbPath);
+      await initDb();
+      await seedStudents();
+      console.log('Database setup complete.');
+    } catch (err) {
+      console.error('Database setup failed:', err);
+      throw err;
     }
-    await initDb();
-    await seedStudents();
   })();
 
   return initializationPromise;
@@ -243,20 +248,34 @@ async function seedStudents() {
 }
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 async function startServer() {
 
   // --- API Routes ---
 
+  // Health check
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   // Auth
   app.post('/api/login', async (req, res) => {
-    const { username, password } = req.body;
-    const user = await dbGet('SELECT * FROM HocSinh WHERE username = ? AND password = ?', [username, password]);
-    if (user) {
-      res.json({ success: true, user });
-    } else {
-      res.status(401).json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu' });
+    try {
+      const { username, password } = req.body;
+      console.log(`Login attempt for: ${username}`);
+      const user = await dbGet('SELECT * FROM HocSinh WHERE username = ? AND password = ?', [username, password]);
+      if (user) {
+        console.log(`Login successful for: ${username}`);
+        res.json({ success: true, user });
+      } else {
+        console.log(`Login failed for: ${username} - Invalid credentials`);
+        res.status(401).json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu' });
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
     }
   });
 
@@ -522,6 +541,7 @@ async function startServer() {
   }
 
   const PORT = process.env.PORT || 3000;
+  console.log(`Attempting to start server on port ${PORT}...`);
   if (process.env.VERCEL !== '1') {
     app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`Server running at http://localhost:${PORT}`);
@@ -529,6 +549,9 @@ async function startServer() {
   }
 }
 
-startServer();
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
 
 export default app;

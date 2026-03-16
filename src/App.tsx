@@ -17,7 +17,20 @@ export default function App() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
   useEffect(() => {
+    const checkServer = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) setServerStatus('online');
+        else setServerStatus('offline');
+      } catch (e) {
+        setServerStatus('offline');
+      }
+    };
+    checkServer();
+    
     const savedUser = localStorage.getItem('classroom_user');
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
@@ -32,11 +45,27 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      console.log('Attempting login to /api/login');
       const response = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
+      console.log('Login response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = 'Đăng nhập thất bại';
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.message || errorMessage;
+        } catch (e) {
+          errorMessage = `Lỗi hệ thống (${response.status})`;
+        }
+        Swal.fire('Thất bại', errorMessage, 'error');
+        return;
+      }
+
       const data = await response.json();
       if (data.success) {
         setUser(data.user);
@@ -120,6 +149,22 @@ export default function App() {
             </div>
             <h1 className="text-3xl font-bold text-slate-900">Smart Classroom</h1>
             <p className="text-slate-500">Vui lòng đăng nhập để tiếp tục</p>
+            <div className="mt-4 flex items-center justify-center">
+              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                serverStatus === 'online' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 
+                serverStatus === 'offline' ? 'bg-red-50 text-red-600 border border-red-100' : 
+                'bg-slate-50 text-slate-600 border border-slate-100'
+              }`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${
+                  serverStatus === 'online' ? 'bg-emerald-500 animate-pulse' : 
+                  serverStatus === 'offline' ? 'bg-red-500' : 
+                  'bg-slate-400'
+                }`} />
+                {serverStatus === 'online' ? 'Máy chủ: Sẵn sàng' : 
+                 serverStatus === 'offline' ? 'Máy chủ: Mất kết nối' : 
+                 'Máy chủ: Đang kiểm tra...'}
+              </div>
+            </div>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">

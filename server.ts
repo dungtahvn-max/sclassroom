@@ -31,6 +31,9 @@ async function setupDb() {
         });
         isTurso = true;
       } else {
+        if (process.env.VERCEL === '1') {
+          console.warn('WARNING: Running on Vercel without Turso configuration. SQLite will not persist data.');
+        }
         console.log('Using Local SQLite Database');
         const { default: Database } = await import('better-sqlite3');
         const dbPath = process.env.DATABASE_PATH || 'classroom.db';
@@ -40,7 +43,9 @@ async function setupDb() {
       await seedStudents();
       console.log('Database setup complete.');
     } catch (err) {
-      console.error('Database setup failed:', err);
+      console.error('CRITICAL: Database setup failed:', err);
+      // Reset promise so we can retry on next request
+      initializationPromise = null;
       throw err;
     }
   })();
@@ -51,10 +56,22 @@ async function setupDb() {
 // Helper for Database Execution (Abstracting Turso vs SQLite)
 const dbExec = async (sql: string) => {
   if (!db) await setupDb();
-  if (isTurso) {
-    return await db.execute(sql);
-  } else {
-    return db.exec(sql);
+  try {
+    if (isTurso) {
+      // Turso execute doesn't like multiple statements, so we split them
+      const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+      if (statements.length > 1) {
+        return await db.batch(statements, "write");
+      } else if (statements.length === 1) {
+        return await db.execute(statements[0]);
+      }
+      return;
+    } else {
+      return db.exec(sql);
+    }
+  } catch (err) {
+    console.error('Database execution failed:', err);
+    throw err;
   }
 };
 
@@ -541,10 +558,18 @@ async function startServer() {
   }
 
   const PORT = process.env.PORT || 3000;
-  console.log(`Attempting to start server on port ${PORT}...`);
+  
   if (process.env.VERCEL !== '1') {
-    app.listen(Number(PORT), '0.0.0.0', () => {
+    const server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`Server running at http://localhost:${PORT}`);
+    });
+    
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Please check if another instance is running.`);
+      } else {
+        console.error('Server error:', err);
+      }
     });
   }
 }

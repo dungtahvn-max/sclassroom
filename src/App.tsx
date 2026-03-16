@@ -20,13 +20,24 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
+    let retryCount = 0;
+    const maxRetries = 5;
+
     const checkServer = async () => {
       try {
         const res = await fetch('/api/health');
-        if (res.ok) setServerStatus('online');
-        else setServerStatus('offline');
+        if (res.ok) {
+          setServerStatus('online');
+        } else {
+          throw new Error('Server not ready');
+        }
       } catch (e) {
-        setServerStatus('offline');
+        if (retryCount < maxRetries) {
+          retryCount++;
+          setTimeout(checkServer, 2000);
+        } else {
+          setServerStatus('offline');
+        }
       }
     };
     checkServer();

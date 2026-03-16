@@ -2,7 +2,7 @@
 
 Tài liệu này hướng dẫn cách thiết lập cơ sở dữ liệu trên Google Sheets và kết nối với ứng dụng thông qua Google Apps Script (GAS).
 
-----
+---
 
 ## 1. Cấu trúc các Sheet dữ liệu (Google Sheets)
 

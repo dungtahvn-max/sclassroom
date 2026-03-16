@@ -1,7 +1,6 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import Database from 'better-sqlite3';
 import { createClient } from '@libsql/client';
 import { fileURLToPath } from 'url';
 
@@ -14,23 +13,39 @@ const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
 
 let db: any;
 let isTurso = false;
+let initializationPromise: Promise<void> | null = null;
 
-if (TURSO_URL && TURSO_TOKEN) {
-  console.log('Using Turso Cloud Database');
-  db = createClient({
-    url: TURSO_URL,
-    authToken: TURSO_TOKEN,
-  });
-  isTurso = true;
-} else {
-  console.log('Using Local SQLite Database');
-  const dbPath = process.env.DATABASE_PATH || 'classroom.db';
-  db = new Database(dbPath);
+async function setupDb() {
+  if (db) return;
+  if (initializationPromise) return initializationPromise;
+
+  initializationPromise = (async () => {
+    if (TURSO_URL && TURSO_TOKEN) {
+      console.log('Using Turso Cloud Database');
+      db = createClient({
+        url: TURSO_URL,
+        authToken: TURSO_TOKEN,
+      });
+      isTurso = true;
+    } else {
+      if (process.env.VERCEL === '1') {
+        throw new Error('DATABASE ERROR: Bạn đang chạy trên Vercel nhưng chưa cấu hình Turso Database. Vui lòng thiết lập TURSO_DATABASE_URL và TURSO_AUTH_TOKEN trong Environment Variables của Vercel.');
+      }
+      console.log('Using Local SQLite Database');
+      const { default: Database } = await import('better-sqlite3');
+      const dbPath = process.env.DATABASE_PATH || 'classroom.db';
+      db = new Database(dbPath);
+    }
+    await initDb();
+    await seedStudents();
+  })();
+
+  return initializationPromise;
 }
 
 // Helper for Database Execution (Abstracting Turso vs SQLite)
-// Note: For Turso, we use async/await. For SQLite, we wrap it to be async.
 const dbExec = async (sql: string) => {
+  if (!db) await setupDb();
   if (isTurso) {
     return await db.execute(sql);
   } else {
@@ -39,6 +54,7 @@ const dbExec = async (sql: string) => {
 };
 
 const dbGet = async (sql: string, params: any[] = []) => {
+  if (!db) await setupDb();
   if (isTurso) {
     const result = await db.execute({ sql, args: params });
     return result.rows[0];
@@ -48,6 +64,7 @@ const dbGet = async (sql: string, params: any[] = []) => {
 };
 
 const dbAll = async (sql: string, params: any[] = []) => {
+  if (!db) await setupDb();
   if (isTurso) {
     const result = await db.execute({ sql, args: params });
     return result.rows;
@@ -57,10 +74,13 @@ const dbAll = async (sql: string, params: any[] = []) => {
 };
 
 const dbRun = async (sql: string, params: any[] = []) => {
+  if (!db) await setupDb();
   if (isTurso) {
-    return await db.execute({ sql, args: params });
+    const result = await db.execute({ sql, args: params });
+    return { lastInsertRowid: result.lastInsertRowid };
   } else {
-    return db.prepare(sql).run(...params);
+    const result = db.prepare(sql).run(...params);
+    return { lastInsertRowid: result.lastInsertRowid };
   }
 };
 
@@ -156,8 +176,6 @@ async function initDb() {
   }
 }
 
-initDb();
-
 // Helper to generate students
 async function seedStudents() {
   const teacherCount = await dbGet('SELECT COUNT(*) as count FROM HocSinh WHERE role != ?', ['teacher']);
@@ -224,8 +242,6 @@ async function seedStudents() {
   }
 }
 
-seedStudents();
-
 const app = express();
 app.use(express.json());
 
@@ -234,9 +250,9 @@ async function startServer() {
   // --- API Routes ---
 
   // Auth
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-    const user = db.prepare('SELECT * FROM HocSinh WHERE username = ? AND password = ?').get(username, password);
+    const user = await dbGet('SELECT * FROM HocSinh WHERE username = ? AND password = ?', [username, password]);
     if (user) {
       res.json({ success: true, user });
     } else {
@@ -244,11 +260,11 @@ async function startServer() {
     }
   });
 
-  app.post('/api/change-password', (req, res) => {
+  app.post('/api/change-password', async (req, res) => {
     const { username, oldPassword, newPassword } = req.body;
-    const user = db.prepare('SELECT * FROM HocSinh WHERE username = ? AND password = ?').get(username, oldPassword);
+    const user = await dbGet('SELECT * FROM HocSinh WHERE username = ? AND password = ?', [username, oldPassword]);
     if (user) {
-      db.prepare('UPDATE HocSinh SET password = ?, must_change_password = 0 WHERE username = ?').run(newPassword, username);
+      await dbRun('UPDATE HocSinh SET password = ?, must_change_password = 0 WHERE username = ?', [newPassword, username]);
       res.json({ success: true });
     } else {
       res.status(401).json({ success: false, message: 'Mật khẩu cũ không chính xác' });
@@ -256,38 +272,36 @@ async function startServer() {
   });
 
   // Students
-  app.get('/api/students', (req, res) => {
-    const students = db.prepare('SELECT * FROM HocSinh').all();
+  app.get('/api/students', async (req, res) => {
+    const students = await dbAll('SELECT * FROM HocSinh');
     res.json(students);
   });
 
-  app.post('/api/students', (req, res) => {
+  app.post('/api/students', async (req, res) => {
     const { username, password, hoTen, role, to_group, chucVu } = req.body;
     try {
-      const result = db.prepare('INSERT INTO HocSinh (username, password, hoTen, role, to_group, chucVu) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(username, password, hoTen, role, to_group, chucVu);
+      const result = await dbRun('INSERT INTO HocSinh (username, password, hoTen, role, to_group, chucVu) VALUES (?, ?, ?, ?, ?, ?)', [username, password, hoTen, role, to_group, chucVu]);
       res.json({ success: true, id: result.lastInsertRowid });
     } catch (e) {
       res.status(400).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     }
   });
 
-  app.put('/api/students/:id', (req, res) => {
+  app.put('/api/students/:id', async (req, res) => {
     const { username, password, hoTen, role, to_group, chucVu } = req.body;
     const { id } = req.params;
     try {
-      db.prepare('UPDATE HocSinh SET username = ?, password = ?, hoTen = ?, role = ?, to_group = ?, chucVu = ? WHERE id = ?')
-        .run(username, password, hoTen, role, to_group, chucVu, id);
+      await dbRun('UPDATE HocSinh SET username = ?, password = ?, hoTen = ?, role = ?, to_group = ?, chucVu = ? WHERE id = ?', [username, password, hoTen, role, to_group, chucVu, id]);
       res.json({ success: true });
     } catch (e) {
       res.status(400).json({ success: false, message: 'Lỗi khi cập nhật học sinh' });
     }
   });
 
-  app.delete('/api/students/:id', (req, res) => {
+  app.delete('/api/students/:id', async (req, res) => {
     const { id } = req.params;
     try {
-      db.prepare('DELETE FROM HocSinh WHERE id = ?').run(id);
+      await dbRun('DELETE FROM HocSinh WHERE id = ?', [id]);
       res.json({ success: true });
     } catch (e) {
       res.status(400).json({ success: false, message: 'Lỗi khi xóa học sinh' });
@@ -295,120 +309,114 @@ async function startServer() {
   });
 
   // Logs General
-  app.get('/api/logs/general', (req, res) => {
-    const logs = db.prepare('SELECT * FROM Log_Chung ORDER BY ngay DESC').all();
+  app.get('/api/logs/general', async (req, res) => {
+    const logs = await dbAll('SELECT * FROM Log_Chung ORDER BY ngay DESC');
     res.json(logs);
   });
 
-  app.post('/api/logs/general', (req, res) => {
+  app.post('/api/logs/general', async (req, res) => {
     const { ngay, hocTap, phongTrao, luuY, tamSu, thongBaoChung, ghiChep_ViecTot, ghiChep_ViPham, createdBy } = req.body;
-    db.prepare('INSERT INTO Log_Chung (ngay, hocTap, phongTrao, luuY, tamSu, thongBaoChung, ghiChep_ViecTot, ghiChep_ViPham, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(ngay, hocTap, phongTrao, luuY, tamSu, thongBaoChung, ghiChep_ViecTot, ghiChep_ViPham, createdBy);
+    await dbRun('INSERT INTO Log_Chung (ngay, hocTap, phongTrao, luuY, tamSu, thongBaoChung, ghiChep_ViecTot, ghiChep_ViPham, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [ngay, hocTap, phongTrao, luuY, tamSu, thongBaoChung, ghiChep_ViecTot, ghiChep_ViPham, createdBy]);
     res.json({ success: true });
   });
 
-  app.delete('/api/logs/general/:id', (req, res) => {
-    db.prepare('DELETE FROM Log_Chung WHERE id = ?').run(req.params.id);
+  app.delete('/api/logs/general/:id', async (req, res) => {
+    await dbRun('DELETE FROM Log_Chung WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   });
 
   // Logs Group
-  app.get('/api/logs/group', (req, res) => {
-    const logs = db.prepare('SELECT * FROM Log_To ORDER BY ngay DESC').all();
+  app.get('/api/logs/group', async (req, res) => {
+    const logs = await dbAll('SELECT * FROM Log_To ORDER BY ngay DESC');
     res.json(logs);
   });
 
-  app.post('/api/logs/group', (req, res) => {
+  app.post('/api/logs/group', async (req, res) => {
     const { ngay, to_group, tenHocSinh, hocTap, hoatDong, hoaDong, chuyenCan, dongPhuc, nhanRieng_VoiThay, createdBy } = req.body;
-    db.prepare('INSERT INTO Log_To (ngay, to_group, tenHocSinh, hocTap, hoatDong, hoaDong, chuyenCan, dongPhuc, nhanRieng_VoiThay, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(ngay, to_group, tenHocSinh, hocTap, hoatDong, hoaDong, chuyenCan, dongPhuc, nhanRieng_VoiThay, createdBy);
+    await dbRun('INSERT INTO Log_To (ngay, to_group, tenHocSinh, hocTap, hoatDong, hoaDong, chuyenCan, dongPhuc, nhanRieng_VoiThay, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [ngay, to_group, tenHocSinh, hocTap, hoatDong, hoaDong, chuyenCan, dongPhuc, nhanRieng_VoiThay, createdBy]);
     res.json({ success: true });
   });
 
-  app.delete('/api/logs/group/:id', (req, res) => {
-    db.prepare('DELETE FROM Log_To WHERE id = ?').run(req.params.id);
+  app.delete('/api/logs/group/:id', async (req, res) => {
+    await dbRun('DELETE FROM Log_To WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   });
 
   // Logs Personal
-  app.get('/api/logs/personal', (req, res) => {
-    const logs = db.prepare('SELECT * FROM Log_CaNhan ORDER BY ngay DESC').all();
+  app.get('/api/logs/personal', async (req, res) => {
+    const logs = await dbAll('SELECT * FROM Log_CaNhan ORDER BY ngay DESC');
     res.json(logs);
   });
 
-  app.post('/api/logs/personal', (req, res) => {
+  app.post('/api/logs/personal', async (req, res) => {
     const { id, ngay, username, tenHocSinh, diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, machRieng, mucDoHanhPhuc, canGapCo_KhanCap } = req.body;
     if (id) {
-      db.prepare('UPDATE Log_CaNhan SET diem_HT = ?, diem_HD = ?, diem_HoaDong = ?, diem_CC = ?, diem_DP = ?, mucDoHanhPhuc = ? WHERE id = ?')
-        .run(diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, mucDoHanhPhuc, id);
+      await dbRun('UPDATE Log_CaNhan SET diem_HT = ?, diem_HD = ?, diem_HoaDong = ?, diem_CC = ?, diem_DP = ?, mucDoHanhPhuc = ? WHERE id = ?', [diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, mucDoHanhPhuc, id]);
     } else {
-      db.prepare('INSERT INTO Log_CaNhan (ngay, username, tenHocSinh, diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, machRieng, mucDoHanhPhuc, canGapCo_KhanCap) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(ngay, username, tenHocSinh, diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, machRieng, mucDoHanhPhuc, canGapCo_KhanCap ? 1 : 0);
+      await dbRun('INSERT INTO Log_CaNhan (ngay, username, tenHocSinh, diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, machRieng, mucDoHanhPhuc, canGapCo_KhanCap) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [ngay, username, tenHocSinh, diem_HT, diem_HD, diem_HoaDong, diem_CC, diem_DP, machRieng, mucDoHanhPhuc, canGapCo_KhanCap ? 1 : 0]);
     }
     res.json({ success: true });
   });
 
-  app.delete('/api/logs/personal/:id', (req, res) => {
-    db.prepare('DELETE FROM Log_CaNhan WHERE id = ?').run(req.params.id);
+  app.delete('/api/logs/personal/:id', async (req, res) => {
+    await dbRun('DELETE FROM Log_CaNhan WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   });
 
   // Teacher Feedback & Stickers
-  app.get('/api/feedback/:username', (req, res) => {
-    const feedback = db.prepare('SELECT * FROM PhanHoi_GVCN WHERE username = ? ORDER BY ngay DESC').all(req.params.username);
+  app.get('/api/feedback/:username', async (req, res) => {
+    const feedback = await dbAll('SELECT * FROM PhanHoi_GVCN WHERE username = ? ORDER BY ngay DESC', [req.params.username]);
     res.json(feedback);
   });
 
-  app.post('/api/feedback', (req, res) => {
+  app.post('/api/feedback', async (req, res) => {
     const { ngay, username, noiDungPhanHoi, loaiSticker, stickerIcon } = req.body;
-    db.prepare('INSERT INTO PhanHoi_GVCN (ngay, username, noiDungPhanHoi, loaiSticker, stickerIcon) VALUES (?, ?, ?, ?, ?)')
-      .run(ngay, username, noiDungPhanHoi, loaiSticker, stickerIcon);
+    await dbRun('INSERT INTO PhanHoi_GVCN (ngay, username, noiDungPhanHoi, loaiSticker, stickerIcon) VALUES (?, ?, ?, ?, ?)', [ngay, username, noiDungPhanHoi, loaiSticker, stickerIcon]);
     
     if (loaiSticker) {
-      db.prepare('UPDATE HocSinh SET sticker_count = sticker_count + 1 WHERE username = ?').run(username);
+      await dbRun('UPDATE HocSinh SET sticker_count = sticker_count + 1 WHERE username = ?', [username]);
     }
     res.json({ success: true });
   });
 
-  app.delete('/api/feedback/:id', (req, res) => {
-    db.prepare('DELETE FROM PhanHoi_GVCN WHERE id = ?').run(req.params.id);
+  app.delete('/api/feedback/:id', async (req, res) => {
+    await dbRun('DELETE FROM PhanHoi_GVCN WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   });
 
   // Messages (Mách thầy)
-  app.get('/api/messages/:username', (req, res) => {
-    const messages = db.prepare('SELECT * FROM TinNhan WHERE username = ? ORDER BY ngay DESC').all(req.params.username);
+  app.get('/api/messages/:username', async (req, res) => {
+    const messages = await dbAll('SELECT * FROM TinNhan WHERE username = ? ORDER BY ngay DESC', [req.params.username]);
     res.json(messages);
   });
 
-  app.get('/api/messages', (req, res) => {
-    const messages = db.prepare('SELECT * FROM TinNhan ORDER BY ngay DESC').all();
+  app.get('/api/messages', async (req, res) => {
+    const messages = await dbAll('SELECT * FROM TinNhan ORDER BY ngay DESC');
     res.json(messages);
   });
 
-  app.post('/api/messages', (req, res) => {
+  app.post('/api/messages', async (req, res) => {
     const { ngay, username, tenHocSinh, noiDung, isEmergency } = req.body;
-    db.prepare('INSERT INTO TinNhan (ngay, username, tenHocSinh, noiDung, isEmergency) VALUES (?, ?, ?, ?, ?)')
-      .run(ngay, username, tenHocSinh, noiDung, isEmergency ? 1 : 0);
+    await dbRun('INSERT INTO TinNhan (ngay, username, tenHocSinh, noiDung, isEmergency) VALUES (?, ?, ?, ?, ?)', [ngay, username, tenHocSinh, noiDung, isEmergency ? 1 : 0]);
     res.json({ success: true });
   });
 
-  app.delete('/api/messages/:id', (req, res) => {
-    db.prepare('DELETE FROM TinNhan WHERE id = ?').run(req.params.id);
+  app.delete('/api/messages/:id', async (req, res) => {
+    await dbRun('DELETE FROM TinNhan WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   });
 
   // --- Statistics ---
 
-  app.get('/api/stats/weekly', (req, res) => {
+  app.get('/api/stats/weekly', async (req, res) => {
     // Reference: March 9, 2026 is the start of Week 25
     const refDate = new Date('2026-03-09T00:00:00Z');
     
-    const logs = db.prepare('SELECT * FROM Log_CaNhan').all() as any[];
+    const logs = await dbAll('SELECT * FROM Log_CaNhan');
     
     const stats: Record<number, any> = {};
 
-    logs.forEach(log => {
+    logs.forEach((log: any) => {
       const logDate = new Date(log.ngay.replace(' ', 'T') + 'Z');
       const diffTime = logDate.getTime() - refDate.getTime();
       const weekOffset = Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
@@ -455,11 +463,11 @@ async function startServer() {
     res.json(result);
   });
 
-  app.get('/api/stats/monthly', (req, res) => {
-    const logs = db.prepare('SELECT * FROM Log_CaNhan').all() as any[];
+  app.get('/api/stats/monthly', async (req, res) => {
+    const logs = await dbAll('SELECT * FROM Log_CaNhan');
     const stats: Record<string, any> = {};
 
-    logs.forEach(log => {
+    logs.forEach((log: any) => {
       const logDate = new Date(log.ngay.replace(' ', 'T') + 'Z');
       const monthKey = `${logDate.getFullYear()}-${String(logDate.getMonth() + 1).padStart(2, '0')}`;
 

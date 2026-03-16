@@ -26,31 +26,40 @@ Chào bạn, tôi đã chuẩn bị sẵn các file cần thiết (`vercel.json`
 
 ---
 
-## Bước 2: Thiết lập Database vĩnh viễn (Khuyên dùng Railway)
+## Bước 2: Thiết lập Database vĩnh viễn (Khuyên dùng Turso cho Vercel)
 
-Vì ứng dụng của bạn đang sử dụng SQLite, cách đơn giản nhất để giữ lại toàn bộ dữ liệu mà không cần sửa code là sử dụng **Railway.app**.
+Vì Vercel là nền tảng Serverless, file `classroom.db` sẽ bị xóa mỗi khi app khởi động lại. Để lưu dữ liệu vĩnh viễn trên Vercel, bạn cần dùng **Turso** (Miễn phí và rất mạnh mẽ).
 
-### Tại sao chọn Railway thay vì Vercel?
-*   Railway hỗ trợ **Persistent Volume** (Ổ đĩa vĩnh viễn), cho phép file `classroom.db` của bạn tồn tại mãi mãi.
-*   Vercel không hỗ trợ việc này (bạn sẽ phải học cách dùng Turso hoặc Supabase và sửa lại toàn bộ code xử lý Database).
-
-### Các bước với Railway:
-1.  Đăng ký tài khoản tại [railway.app](https://railway.app/).
-2.  Chọn **New Project** -> **Deploy from GitHub repo**.
-3.  Chọn repo `smart-classroom` của bạn.
-4.  Trong phần **Settings** của Railway, tìm mục **Volumes** và tạo một Volume mới.
-5.  Gắn Volume đó vào đường dẫn `/app` (hoặc nơi chứa file `.db`).
-6.  Thêm biến môi trường `DATABASE_PATH` trỏ tới `/app/classroom.db`.
+### Các bước với Turso:
+1.  Đăng ký tài khoản tại [turso.tech](https://turso.tech/).
+2.  Tạo một Database mới (ví dụ: `smart-classroom`).
+3.  Lấy **Database URL** (dạng `libsql://...`) và **Auth Token**.
+4.  Trên Vercel, vào phần **Settings** -> **Environment Variables** và thêm:
+    *   `TURSO_DATABASE_URL`: (URL bạn vừa lấy)
+    *   `TURSO_AUTH_TOKEN`: (Token bạn vừa lấy)
 
 ---
 
-## Bước 3: Nếu bạn vẫn muốn dùng Vercel (Dữ liệu sẽ bị mất mỗi khi deploy)
+## Bước 3: Deploy lên Vercel
 
-Nếu bạn chỉ muốn demo và không quan trọng việc mất dữ liệu:
 1.  Truy cập [vercel.com](https://vercel.com/) và kết nối tài khoản GitHub.
 2.  Chọn dự án `smart-classroom` để Import.
-3.  Nhấn **Deploy**.
-4.  **Lưu ý:** Mỗi lần bạn cập nhật code hoặc Vercel khởi động lại server, dữ liệu học sinh/điểm số sẽ quay về trạng thái ban đầu (Seeding).
+3.  Đảm bảo đã thêm các biến môi trường ở Bước 2.
+4.  Nhấn **Deploy**.
+
+---
+
+## Khắc phục lỗi thường gặp
+
+### 1. Lỗi "Không thể kết nối đến máy chủ" (Cannot connect to server)
+Nếu bạn gặp lỗi này sau khi deploy, nguyên nhân thường là:
+*   **Chưa cấu hình Turso**: Bạn **bắt buộc** phải cấu hình Turso ở Bước 2 thì App mới chạy được trên Vercel.
+*   **Lỗi biến môi trường**: Kiểm tra xem tên biến `TURSO_DATABASE_URL` và `TURSO_AUTH_TOKEN` đã viết đúng hoa/thường chưa.
+*   **Kiểm tra Logs**: Trên dashboard của Vercel, vào tab **Logs** để xem chi tiết lỗi server.
+
+### 2. Lỗi Build trên Vercel
+*   Đảm bảo bạn chọn Framework Preset là **Vite**.
+*   Đảm bảo Node.js version là **18** hoặc **20**.
 
 ---
 

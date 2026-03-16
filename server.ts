@@ -2,136 +2,174 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import Database from 'better-sqlite3';
+import { createClient } from '@libsql/client';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = process.env.DATABASE_PATH || 'classroom.db';
-const db = new Database(dbPath);
+// Database Configuration
+const TURSO_URL = process.env.TURSO_DATABASE_URL;
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
+
+let db: any;
+let isTurso = false;
+
+if (TURSO_URL && TURSO_TOKEN) {
+  console.log('Using Turso Cloud Database');
+  db = createClient({
+    url: TURSO_URL,
+    authToken: TURSO_TOKEN,
+  });
+  isTurso = true;
+} else {
+  console.log('Using Local SQLite Database');
+  const dbPath = process.env.DATABASE_PATH || 'classroom.db';
+  db = new Database(dbPath);
+}
+
+// Helper for Database Execution (Abstracting Turso vs SQLite)
+// Note: For Turso, we use async/await. For SQLite, we wrap it to be async.
+const dbExec = async (sql: string) => {
+  if (isTurso) {
+    return await db.execute(sql);
+  } else {
+    return db.exec(sql);
+  }
+};
+
+const dbGet = async (sql: string, params: any[] = []) => {
+  if (isTurso) {
+    const result = await db.execute({ sql, args: params });
+    return result.rows[0];
+  } else {
+    return db.prepare(sql).get(...params);
+  }
+};
+
+const dbAll = async (sql: string, params: any[] = []) => {
+  if (isTurso) {
+    const result = await db.execute({ sql, args: params });
+    return result.rows;
+  } else {
+    return db.prepare(sql).all(...params);
+  }
+};
+
+const dbRun = async (sql: string, params: any[] = []) => {
+  if (isTurso) {
+    return await db.execute({ sql, args: params });
+  } else {
+    return db.prepare(sql).run(...params);
+  }
+};
 
 // Initialize Database Tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS HocSinh (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    hoTen TEXT,
-    ngaySinh TEXT,
-    gioiTinh TEXT,
-    noiSinh TEXT,
-    cccd TEXT,
-    noiO TEXT,
-    sdt TEXT,
-    to_group TEXT,
-    chucVu TEXT,
-    sticker_count INTEGER DEFAULT 0,
-    role TEXT,
-    must_change_password INTEGER DEFAULT 1
-  );
+async function initDb() {
+  const schema = `
+    CREATE TABLE IF NOT EXISTS HocSinh (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      password TEXT,
+      hoTen TEXT,
+      ngaySinh TEXT,
+      gioiTinh TEXT,
+      noiSinh TEXT,
+      cccd TEXT,
+      noiO TEXT,
+      sdt TEXT,
+      to_group TEXT,
+      chucVu TEXT,
+      sticker_count INTEGER DEFAULT 0,
+      role TEXT,
+      must_change_password INTEGER DEFAULT 1
+    );
 
-  CREATE TABLE IF NOT EXISTS Log_Chung (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ngay TEXT,
-    hocTap TEXT,
-    phongTrao TEXT,
-    luuY TEXT,
-    tamSu TEXT,
-    thongBaoChung TEXT,
-    ghiChep_ViecTot TEXT,
-    ghiChep_ViPham TEXT,
-    createdBy TEXT
-  );
+    CREATE TABLE IF NOT EXISTS Log_Chung (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ngay TEXT,
+      hocTap TEXT,
+      phongTrao TEXT,
+      luuY TEXT,
+      tamSu TEXT,
+      thongBaoChung TEXT,
+      ghiChep_ViecTot TEXT,
+      ghiChep_ViPham TEXT,
+      createdBy TEXT
+    );
 
-  CREATE TABLE IF NOT EXISTS Log_To (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ngay TEXT,
-    to_group TEXT,
-    tenHocSinh TEXT,
-    hocTap INTEGER,
-    hoatDong INTEGER,
-    hoaDong INTEGER,
-    chuyenCan INTEGER,
-    dongPhuc INTEGER,
-    nhanRieng_VoiThay TEXT,
-    createdBy TEXT
-  );
+    CREATE TABLE IF NOT EXISTS Log_To (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ngay TEXT,
+      to_group TEXT,
+      tenHocSinh TEXT,
+      hocTap INTEGER,
+      hoatDong INTEGER,
+      hoaDong INTEGER,
+      chuyenCan INTEGER,
+      dongPhuc INTEGER,
+      nhanRieng_VoiThay TEXT,
+      createdBy TEXT
+    );
 
-  CREATE TABLE IF NOT EXISTS Log_CaNhan (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ngay TEXT,
-    username TEXT,
-    tenHocSinh TEXT,
-    diem_HT INTEGER,
-    diem_HD INTEGER,
-    diem_HoaDong INTEGER,
-    diem_CC INTEGER,
-    diem_DP INTEGER,
-    machRieng TEXT,
-    mucDoHanhPhuc INTEGER,
-    canGapCo_KhanCap INTEGER DEFAULT 0
-  );
+    CREATE TABLE IF NOT EXISTS Log_CaNhan (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ngay TEXT,
+      username TEXT,
+      tenHocSinh TEXT,
+      diem_HT INTEGER,
+      diem_HD INTEGER,
+      diem_HoaDong INTEGER,
+      diem_CC INTEGER,
+      diem_DP INTEGER,
+      machRieng TEXT,
+      mucDoHanhPhuc INTEGER,
+      canGapCo_KhanCap INTEGER DEFAULT 0
+    );
 
-  CREATE TABLE IF NOT EXISTS PhanHoi_GVCN (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ngay TEXT,
-    username TEXT,
-    noiDungPhanHoi TEXT,
-    loaiSticker TEXT,
-    stickerIcon TEXT
-  );
+    CREATE TABLE IF NOT EXISTS PhanHoi_GVCN (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ngay TEXT,
+      username TEXT,
+      noiDungPhanHoi TEXT,
+      loaiSticker TEXT,
+      stickerIcon TEXT
+    );
 
-  CREATE TABLE IF NOT EXISTS TinNhan (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ngay TEXT,
-    username TEXT,
-    tenHocSinh TEXT,
-    noiDung TEXT,
-    isEmergency INTEGER DEFAULT 0
-  );
+    CREATE TABLE IF NOT EXISTS TinNhan (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ngay TEXT,
+      username TEXT,
+      tenHocSinh TEXT,
+      noiDung TEXT,
+      isEmergency INTEGER DEFAULT 0
+    );
+  `;
+  
+  await dbExec(schema);
 
-  -- Add must_change_password column if it doesn't exist
-  PRAGMA foreign_keys=off;
-  BEGIN TRANSACTION;
-  CREATE TABLE IF NOT EXISTS HocSinh_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    hoTen TEXT,
-    ngaySinh TEXT,
-    gioiTinh TEXT,
-    noiSinh TEXT,
-    cccd TEXT,
-    noiO TEXT,
-    sdt TEXT,
-    to_group TEXT,
-    chucVu TEXT,
-    sticker_count INTEGER DEFAULT 0,
-    role TEXT,
-    must_change_password INTEGER DEFAULT 1
-  );
-  INSERT OR IGNORE INTO HocSinh_new (id, username, password, hoTen, ngaySinh, gioiTinh, noiSinh, cccd, noiO, sdt, to_group, chucVu, sticker_count, role)
-  SELECT id, username, password, hoTen, ngaySinh, gioiTinh, noiSinh, cccd, noiO, sdt, to_group, chucVu, sticker_count, role FROM HocSinh;
-  DROP TABLE HocSinh;
-  ALTER TABLE HocSinh_new RENAME TO HocSinh;
-  COMMIT;
-  PRAGMA foreign_keys=on;
-`);
+  // Seed Admin Account
+  const admin = await dbGet('SELECT * FROM HocSinh WHERE username = ?', ['admin']);
+  if (!admin) {
+    await dbRun('INSERT INTO HocSinh (username, password, hoTen, role, chucVu, must_change_password) VALUES (?, ?, ?, ?, ?, ?)', 
+      ['admin', 'Anhdung1@', 'Admin GVCN', 'teacher', 'GVCN', 0]);
+  }
+}
 
-// Seed Admin Account
-const seedAdmin = db.prepare('INSERT OR IGNORE INTO HocSinh (username, password, hoTen, role, chucVu, must_change_password) VALUES (?, ?, ?, ?, ?, ?)');
-seedAdmin.run('admin', 'Anhdung1@', 'Admin GVCN', 'teacher', 'GVCN', 0);
+initDb();
 
 // Helper to generate students
-function seedStudents() {
-  const count = db.prepare('SELECT COUNT(*) as count FROM HocSinh WHERE role != ?').get('teacher').count;
+async function seedStudents() {
+  const teacherCount = await dbGet('SELECT COUNT(*) as count FROM HocSinh WHERE role != ?', ['teacher']);
+  const count = teacherCount.count;
   // If we have exactly 44 students, assume it's already seeded correctly
   if (count === 44) return;
 
   // Clear existing students (except admin) to re-initialize accurately as requested
-  db.prepare('DELETE FROM HocSinh WHERE role != ?').run('teacher');
+  await dbRun('DELETE FROM HocSinh WHERE role != ?', ['teacher']);
 
   const students = [
+    // ... (students list remains the same)
     { username: "anhntv", password: "15052008", hoTen: "Nguyễn Thị Vân Anh", ngaySinh: "2008-05-15", gioiTinh: "Nữ", noiSinh: "Bình Dương", cccd: "036308007092", noiO: "Bình Cơ", sdt: "0356750384", to_group: "1", chucVu: "Học sinh", role: "student", must_change_password: 1 },
     { username: "anhnt", password: "13052008", hoTen: "Nguyễn Tuấn Anh", ngaySinh: "2008-05-13", gioiTinh: "Nam", noiSinh: "Hà Tĩnh", cccd: "042208008232", noiO: "Uyên Hưng, Tân Uyên", sdt: "0899030165", to_group: "1", chucVu: "Tổ trưởng", role: "group_leader", must_change_password: 1 },
     { username: "anhnvt", password: "15102008", hoTen: "Nguyễn Vũ Trâm Anh", ngaySinh: "2008-10-15", gioiTinh: "Nữ", noiSinh: "Nghệ An", cccd: "040308001141", noiO: "Bình Cơ", sdt: "0394036275", to_group: "1", chucVu: "Học sinh", role: "student", must_change_password: 1 },
@@ -178,16 +216,12 @@ function seedStudents() {
     { username: "trucntt", password: "18102008", hoTen: "Nguyễn Thị Thiên Trúc", ngaySinh: "2008-10-18", gioiTinh: "Nữ", noiSinh: "Bình Dương", cccd: "080308004815", noiO: "Bình Cơ", sdt: "0379626657", to_group: "4", chucVu: "Học sinh", role: "student", must_change_password: 1 }
   ];
 
-  const insert = db.prepare(`
-    INSERT INTO HocSinh (username, password, hoTen, ngaySinh, gioiTinh, noiSinh, cccd, noiO, sdt, to_group, chucVu, role, must_change_password)
-    VALUES (@username, @password, @hoTen, @ngaySinh, @gioiTinh, @noiSinh, @cccd, @noiO, @sdt, @to_group, @chucVu, @role, @must_change_password)
-  `);
-
-  const transaction = db.transaction((data) => {
-    for (const s of data) insert.run(s);
-  });
-
-  transaction(students);
+  for (const s of students) {
+    await dbRun(`
+      INSERT INTO HocSinh (username, password, hoTen, ngaySinh, gioiTinh, noiSinh, cccd, noiO, sdt, to_group, chucVu, role, must_change_password)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [s.username, s.password, s.hoTen, s.ngaySinh, s.gioiTinh, s.noiSinh, s.cccd, s.noiO, s.sdt, s.to_group, s.chucVu, s.role, s.must_change_password]);
+  }
 }
 
 seedStudents();
